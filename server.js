@@ -1,38 +1,117 @@
 'use strict';
 
-const crypto = require('crypto');
-const db = new Map();
+const http = require('http');
+const qs = require('querystring');
+const db = require('./db');
 
-function hashPass(password) {
-  const hash = crypto.createHash('sha256');
-  hash.update(password);
-  return hash.digest('hex');
+const server = new http.Server();
+
+const page = `
+<!doctype html>
+<html>
+  <head>
+    <title>chjango&apos;s domain</title>
+  </head>
+  <body>
+    <p>__MESSAGE__</p>
+    <p>Signup:</p>
+    <form action="/signup" method="POST">
+      <input type="text" name="username" placeholder="Username">
+      <input type="password" name="password" placeholder="Password">
+      <input type="submit">
+    </form>
+    <p>Login:</p>
+    <form action="/login" method="POST">
+      <input type="text" name="username" placeholder="Username">
+      <input type="password" name="password" placeholder="Password">
+      <input type="submit">
+    </form>
+  </body>
+</html>
+`;
+
+function makePage(msg) {
+  return page.replace(/__MESSAGE__/, msg);
 }
 
-function createUser(username, password) {
-  if (db.has(username)) {
-    throw new Error('Username exists');
-  }
-  const hash = hashPass(password);
-  db.set(username, hash);
+function respond(res, code, msg) {
+  const html = makePage(msg);
+
+  res.writeHead(code, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': Buffer.byteLength(html, 'utf8').toString(10)
+  });
+
+  res.end(html);
 }
 
-function verifyUser(username, password) {
-  if (!db.has(username)) {
-    return false;
-  }
-  const hash1 = db.get(username);
-  const hash2 = hashPass(password);
-  if (hash1 === hash2) {
-    return true;
-  }
-  return false;
-}
-//                  0           1               2
-// process.argv = ['node', 'server.js', 'hello world'];
-// const arg = process.argv[2];
-// const hash = hashPass(arg);
-// console.log(hash);
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
 
-createUser('Chjango', 'foobar');
-console.log(verifyUser('Chjango', 'foobar2'));
+    req.setEncoding('utf8');
+    req.on('data', (data) => {
+      body += data;
+    });
+
+    req.on('error', reject);
+
+    req.on('end', () => {
+      let data;
+
+      try {
+        data = qs.parse(body);
+      } catch (e) {
+        data = Object.create(null);
+      }
+
+      resolve(data);
+    });
+  });
+}
+
+server.on('request', async (req, res) => {
+  try {
+    await handleRequest(req, res);
+  } catch (e) {
+    console.error(e.stack);
+  }
+});
+
+async function handleRequest(req, res) {
+  if (req.method === 'POST') {
+    const body = await readBody(req);
+
+    if (req.url === '/signup') {
+      try {
+        db.createUser(body.username, body.password);
+      } catch (error) {
+        respond(res, 400, error.message);
+        return;
+      }
+      respond(res, 200, `You (${body.username}) are signed up.`);
+      return;
+    }
+
+    if (req.url === '/login') {
+      if (db.verifyUser(body.username, body.password)) {
+        respond(res, 200, 'You have logged in.');
+        return;
+      }
+      respond(res, 200, `Bad password.`);
+      return;
+    }
+
+    respond(res, 404, 'Not found.');
+    return;
+  }
+
+  if (req.method !== 'GET' || req.url !== '/') {
+    respond(res, 404, 'Not found.');
+    return;
+  }
+
+  respond(res, 200, 'Welcome!');
+}
+
+server.listen(8080, '127.0.0.1');
